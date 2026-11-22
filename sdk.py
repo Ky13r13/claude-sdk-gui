@@ -26,16 +26,14 @@ async def run_agent(cwd, turns, prompt, output, ask_permission):
         return PermissionResultDeny(
             message="User denied the request in the GUI."
         )
-        if isinstance(message, ResultMessage):
-            session_id = message.session_id
-        options = ClaudeAgentOptions(
+
+    options = ClaudeAgentOptions(
         cwd=cwd,
         tools=[
             "Read", "Glob", "Grep",
             "Edit", "Write", "Bash"
         ],
         # Read-only operations are automatically approved
-        resume=session_id,
         allowed_tools=["Read", "Glob", "Grep"],
         permission_mode="default",
         can_use_tool=permission_handler,
