@@ -17,11 +17,65 @@ events = queue.Queue()
 pending_approvals = deque()
 active_approval = None
 
+SESSION_FILE = (
+    Path.home() / ".config" /
+    "claude-sdk-gui" / "sessions.json"
+)
+
+
+# ---------- SESSION STORAGE ----------
+
+def load_sessions():
+    if SESSION_FILE.exists():
+        return json.loads(SESSION_FILE.read_text())
+    return {}
+
+
+def write_sessions(sessions):
+    SESSION_FILE.parent.mkdir(
+        parents=True, exist_ok=True
+    )
+
+    # Atomic replacement avoids incomplete JSON writes
+    temporary = SESSION_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(sessions, indent=2))
+    temporary.replace(SESSION_FILE)
+
+
+def save_session(cwd, session_id):
+    sessions = load_sessions()
+    sessions[cwd] = session_id
+    write_sessions(sessions)
+
+
+def new_session():
+    if run_button["state"] == "disabled":
+        messagebox.showwarning(
+            "Agent running",
+            "Finish the current run first."
+        )
+        return
+
+    cwd = str(
+        Path(cwd_entry.get()).expanduser().resolve()
+    )
+
+    sessions = load_sessions()
+    sessions.pop(cwd, None)
+    write_sessions(sessions)
+
+    output.delete("1.0", tk.END)
+    output.insert(
+        tk.END,
+        "New session started. Previous history "
+        "is no longer selected.\n"
+    )
+
 
 # ---------- AGENT EXECUTION ----------
 
 def start_agent():
-    cwd = Path(cwd_entry.get()).expanduser()
+    cwd = Path(cwd_entry.get()).expanduser().resolve()
     prompt = prompt_entry.get("1.0", tk.END).strip()
 
     try:
@@ -29,25 +83,41 @@ def start_agent():
 
         if turns < 1:
             raise ValueError("Turns must be positive")
+
         if not cwd.is_dir():
             raise ValueError("Invalid working directory")
+
         if not prompt:
             raise ValueError("Prompt cannot be empty")
 
-    except ValueError as error:
+        session_id = load_sessions().get(str(cwd))
+
+    except (ValueError, OSError) as error:
         messagebox.showerror("Invalid input", str(error))
         return
 
-    output.delete("1.0", tk.END)
-    run_button.config(state="disabled")
+    # Keep the existing visible conversation
+    output.insert(tk.END, f"\nYOU: {prompt}\n\n")
+    output.see(tk.END)
 
-    # Called from the SDK's asyncio worker
+    if session_id:
+        output.insert(tk.END, "Resuming saved session...\n")
+    else:
+        output.insert(tk.END, "Starting new session...\n")
+
+    prompt_entry.delete("1.0", tk.END)
+    run_button.config(state="disabled")
+    new_button.config(state="disabled")
+
+    # Permission requests from the SDK worker
     async def ask_permission(tool_name, tool_input):
         decision = Future()
+
         events.put((
             "permission",
             (tool_name, tool_input, decision)
         ))
+
         return await asyncio.wrap_future(decision)
 
     def worker():
@@ -61,10 +131,19 @@ def start_agent():
                         ("output", text)
                     ),
                     ask_permission=ask_permission,
+                    session_id=session_id,
+                    save_session=lambda sid: save_session(
+                        str(cwd), sid
+                    ),
                 )
             )
+
         except Exception as error:
-            events.put(("output", f"ERROR: {error}\n"))
+            events.put((
+                "output",
+                f"ERROR: {error}\n"
+            ))
+
         finally:
             events.put(("done", None))
 
@@ -102,7 +181,7 @@ def show_next_approval():
 
     tk.Label(
         dialog,
-        text="Review the complete tool input before approving."
+        text="Review the tool input before approving."
     ).pack()
 
     details = scrolledtext.ScrolledText(
@@ -157,7 +236,7 @@ def show_next_approval():
     )
 
 
-# ---------- EVENT HANDLING ----------
+# ---------- GUI EVENT LOOP ----------
 
 def update_gui():
     while True:
@@ -176,6 +255,7 @@ def update_gui():
 
         elif event == "done":
             run_button.config(state="normal")
+            new_button.config(state="normal")
 
     root.after(100, update_gui)
 
@@ -184,7 +264,7 @@ def on_close():
     if run_button["state"] == "disabled":
         messagebox.showwarning(
             "Agent running",
-            "Finish the agent run before closing the GUI."
+            "Finish the agent run before closing."
         )
         return
 
@@ -197,7 +277,9 @@ root = tk.Tk()
 root.title("Claude Agent")
 root.geometry("700x600")
 
-tk.Label(root, text="Working Directory").pack(pady=4)
+tk.Label(
+    root, text="Working Directory"
+).pack(pady=4)
 
 cwd_entry = tk.Entry(root, width=75)
 cwd_entry.insert(
@@ -223,14 +305,26 @@ prompt_entry.pack(
     fill="x", padx=12, pady=6
 )
 
-run_button = tk.Button(
-    root,
-    text="Run Agent",
-    command=start_agent
-)
-run_button.pack(pady=10)
+buttons = tk.Frame(root)
+buttons.pack(pady=10)
 
-tk.Label(root, text="Agent Output").pack()
+run_button = tk.Button(
+    buttons,
+    text="Run Agent",
+    command=start_agent,
+    width=16
+)
+run_button.pack(side="left", padx=5)
+
+new_button = tk.Button(
+    buttons,
+    text="New Session",
+    command=new_session,
+    width=16
+)
+new_button.pack(side="left", padx=5)
+
+tk.Label(root, text="Conversation").pack()
 
 output = scrolledtext.ScrolledText(
     root, height=14
