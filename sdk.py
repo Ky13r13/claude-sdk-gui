@@ -23,6 +23,7 @@ async def run_agent(
     save_session=None,
     model=None,
     allow_writes=False,
+    auto_approve=False,
 ):
 
     async def permission_handler(tool_name, input_data, context):
@@ -34,7 +35,9 @@ async def run_agent(
             return PermissionResultDeny(
                 message="File modifications are disabled in the GUI."
             )
-
+        if allow_writes and auto_approve:
+            output(f"AUTO-APPROVED: {tool_name}\n")
+            return PermissionResultAllow()
         approved = await ask_permission(tool_name, input_data)
 
         if approved:
@@ -50,19 +53,27 @@ async def run_agent(
     write_tools = ["Edit", "Write", "Bash"]
 
     options = ClaudeAgentOptions(
-        cwd=cwd,
-        model=model,
-        tools=read_tools + write_tools if allow_writes else read_tools,
-        allowed_tools=read_tools,
-        disallowed_tools=(
-            [] if allow_writes
-            else ["Edit", "Write", "Bash", "NotebookEdit"]
-        ),
-        permission_mode="default",
-        can_use_tool=permission_handler,
-        max_turns=turns,
-        resume=session_id,
-    )
+            cwd=cwd,
+            model=model,
+            tools=(
+                ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+                if allow_writes
+                else ["Read", "Glob", "Grep"]
+            ),
+            allowed_tools=["Read", "Glob", "Grep"],
+            disallowed_tools=(
+                [] if allow_writes
+                else ["Edit", "Write", "Bash", "NotebookEdit"]
+            ),
+            permission_mode=(
+                "bypassPermissions"
+                if allow_writes and auto_approve
+                else "default"
+            ),
+            can_use_tool=permission_handler,
+            max_turns=turns,
+            resume=session_id,
+        )
 
     reported_model = None
 
