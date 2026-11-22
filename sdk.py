@@ -21,9 +21,20 @@ async def run_agent(
     ask_permission,
     session_id=None,
     save_session=None,
+    model=None,
+    allow_writes=False,
 ):
 
     async def permission_handler(tool_name, input_data, context):
+
+        # Extra protection when read-only
+        if not allow_writes and tool_name in (
+            "Edit", "Write", "Bash", "NotebookEdit"
+        ):
+            return PermissionResultDeny(
+                message="File modifications are disabled in the GUI."
+            )
+
         approved = await ask_permission(tool_name, input_data)
 
         if approved:
@@ -35,20 +46,25 @@ async def run_agent(
             message="User denied the request in the GUI."
         )
 
+    read_tools = ["Read", "Glob", "Grep"]
+    write_tools = ["Edit", "Write", "Bash"]
+
     options = ClaudeAgentOptions(
         cwd=cwd,
-        tools=[
-            "Read", "Glob", "Grep",
-            "Edit", "Write", "Bash"
-        ],
-        allowed_tools=["Read", "Glob", "Grep"],
+        model=model,
+        tools=read_tools + write_tools if allow_writes else read_tools,
+        allowed_tools=read_tools,
+        disallowed_tools=(
+            [] if allow_writes
+            else ["Edit", "Write", "Bash", "NotebookEdit"]
+        ),
         permission_mode="default",
         can_use_tool=permission_handler,
         max_turns=turns,
-
-        # Continue the saved conversation
         resume=session_id,
     )
+
+    reported_model = None
 
     try:
         async for message in query(
@@ -56,17 +72,27 @@ async def run_agent(
             options=options,
         ):
 
-            # Capture the session ID when Claude starts
             if isinstance(message, SystemMessage):
                 if message.subtype == "init":
                     sid = message.data.get("session_id")
+                    actual_model = message.data.get("model")
+
                     if sid and save_session:
                         save_session(sid)
+
                     output(f"SESSION: {sid}\n")
 
-            elif isinstance(message, AssistantMessage):
-                for block in message.content:
+                    if actual_model:
+                        reported_model = actual_model
+                        output(f"MODEL: {actual_model}\n")
 
+            elif isinstance(message, AssistantMessage):
+                # Detect the actual model, including fallbacks
+                if message.model != reported_model:
+                    reported_model = message.model
+                    output(f"MODEL: {message.model}\n")
+
+                for block in message.content:
                     if isinstance(block, TextBlock):
                         output(f"CLAUDE: {block.text}\n\n")
 
@@ -74,7 +100,6 @@ async def run_agent(
                         output(f"TOOL: {block.name}\n")
 
             elif isinstance(message, ResultMessage):
-                # Save the session for the next GUI prompt
                 if message.session_id and save_session:
                     save_session(message.session_id)
 

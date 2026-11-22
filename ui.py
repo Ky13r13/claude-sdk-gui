@@ -8,7 +8,7 @@ import tkinter as tk
 from collections import deque
 from concurrent.futures import Future
 from pathlib import Path
-from tkinter import scrolledtext, messagebox
+from tkinter import scrolledtext, messagebox, ttk
 
 from sdk import run_agent
 
@@ -77,7 +77,14 @@ def new_session():
 def start_agent():
     cwd = Path(cwd_entry.get()).expanduser().resolve()
     prompt = prompt_entry.get("1.0", tk.END).strip()
+    selected_model = model_var.get()
 
+    model = (
+        None if selected_model == "Default"
+        else selected_model.lower()
+            )
+
+    allow_writes = allow_writes_var.get()
     try:
         turns = int(turns_entry.get())
 
@@ -127,6 +134,8 @@ def start_agent():
                     cwd=str(cwd),
                     turns=turns,
                     prompt=prompt,
+                    model=model,
+                    allow_writes=allow_writes,
                     output=lambda text: events.put(
                         ("output", text)
                     ),
@@ -295,6 +304,30 @@ turns_entry = tk.Spinbox(
 turns_entry.delete(0, tk.END)
 turns_entry.insert(0, "30")
 turns_entry.pack(pady=4)
+tk.Label(root, text="Claude Model").pack(pady=(10, 2))
+
+model_var = tk.StringVar(value="Default")
+
+model_selector = ttk.Combobox(
+    root,
+    textvariable=model_var,
+    values=["Default", "Opus", "Sonnet", "Haiku"],
+    state="readonly",
+    width=20,
+)
+model_selector.pack(pady=4)
+
+
+# ---------- WRITE PERMISSIONS ----------
+
+allow_writes_var = tk.BooleanVar(value=False)
+
+write_check = ttk.Checkbutton(
+    root,
+    text="Enable edits and Bash (GUI approval required)",
+    variable=allow_writes_var,
+)
+write_check.pack(pady=8)
 
 tk.Label(root, text="Agent Prompt").pack()
 
